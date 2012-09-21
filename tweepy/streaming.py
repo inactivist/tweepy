@@ -15,7 +15,7 @@ from tweepy.utils import import_simplejson, urlencode_noplus
 json = import_simplejson()
 
 STREAM_VERSION = 1
-
+DUMP_DATA = False
 
 class StreamListener(object):
 
@@ -62,6 +62,23 @@ class StreamListener(object):
         return
 
 
+class HTTPResponseDumper(httplib.HTTPResponse):
+    def __init__(self, sock, debuglevel=0, strict=0, method=None, buffering=False):
+        httplib.HTTPResponse.__init__(self, sock, debuglevel, strict, method, buffering)
+        self.file = open("twitter-stream.txt", "wb")
+
+    def read(self, reqlen=None):
+        data = httplib.HTTPResponse.read(self, reqlen)
+        # self.file.write("REQLEN=%d DLEN=%d [%s]\n" % (reqlen, len(data), data))
+        self.file.write(data)
+        self.file.flush()
+        return data
+
+
+class HTTPSConnectionDumper(httplib.HTTPSConnection):
+    response_class = HTTPResponseDumper
+
+
 class Stream(object):
 
     host = 'stream.twitter.com'
@@ -73,8 +90,8 @@ class Stream(object):
         self.timeout = options.get("timeout", 300.0)
         self.retry_count = options.get("retry_count")
         self.retry_time = options.get("retry_time", 10.0)
-        self.snooze_time = options.get("snooze_time",  5.0)
-        self.buffer_size = options.get("buffer_size",  1500)
+        self.snooze_time = options.get("snooze_time", 5.0)
+        self.buffer_size = options.get("buffer_size", 1500)
         if options.get("secure", True):
             self.scheme = "https"
         else:
@@ -101,12 +118,16 @@ class Stream(object):
                 if self.scheme == "http":
                     conn = httplib.HTTPConnection(self.host)
                 else:
-                    conn = httplib.HTTPSConnection(self.host)
+                    if DUMP_DATA:
+                        conn = HTTPSConnectionDumper(self.host)
+                    else:
+                        conn = httplib.HTTPSConnection(self.host)
                 self.auth.apply_auth(url, 'POST', self.headers, self.parameters)
                 conn.connect()
                 conn.sock.settimeout(self.timeout)
                 conn.request('POST', self.url, self.body, headers=self.headers)
                 resp = conn.getresponse()
+
                 if resp.status != 200:
                     if self.listener.on_error(resp.status) is False:
                         break
@@ -135,9 +156,8 @@ class Stream(object):
             raise
 
     def _data(self, data):
-        for d in [dt for dt in data.split('\n') if dt]:
-            if self.listener.on_data(d) is False:
-                self.running = False
+        if self.listener.on_data(data) is False:
+            self.running = False
 
     def _read_loop(self, resp):
 
@@ -158,7 +178,7 @@ class Stream(object):
 
             # read the next twitter status object
             if delimited_string.strip().isdigit():
-                next_status_obj = resp.read( int(delimited_string) )
+                next_status_obj = resp.read(int(delimited_string))
                 self._data(next_status_obj)
 
         if resp.isclosed():
@@ -180,7 +200,7 @@ class Stream(object):
         if self.running:
             raise TweepError('Stream object already connected!')
         self.url = '/2/user.json?delimited=length'
-        self.host='userstream.twitter.com'
+        self.host = 'userstream.twitter.com'
         self._start(async)
 
     def firehose(self, count=None, async=False):
@@ -199,17 +219,21 @@ class Stream(object):
         self.url = '/%i/statuses/retweet.json?delimited=length' % STREAM_VERSION
         self._start(async)
 
-    def sample(self, count=None, async=False):
+    def sample(self, count=None, async=False, stall_warnings=False):
         self.parameters = {'delimited': 'length'}
         if self.running:
             raise TweepError('Stream object already connected!')
         self.url = '/%i/statuses/sample.json?delimited=length' % STREAM_VERSION
         if count:
             self.url += '&count=%s' % count
+        if stall_warnings:
+            self.url += '&stall_warnings=true'
+#        if stall_warnings:
+#            self.parameters['stall_warnings'] = stall_warnings
         self._start(async)
 
-    def filter(self, follow=None, track=None, async=False, locations=None, 
-        count = None, stall_warnings=False):
+    def filter(self, follow=None, track=None, async=False, locations=None,
+        count=None, stall_warnings=False):
         self.parameters = {}
         self.headers['Content-type'] = "application/x-www-form-urlencoded"
         if self.running:
