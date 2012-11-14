@@ -8,7 +8,7 @@ class TweepError(Exception):
     def __init__(self, reason, response=None):
         self.reason = unicode(reason)
         self.response = response
-        Exception.__init__(self, reason)
+        Exception.__init__(self, reason, response)
 
     def __str__(self):
         return self.reason
